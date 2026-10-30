@@ -1,0 +1,35 @@
+# Build output
+build/
+build-*/
+cmake-build-*/
+out/
+CMakeCache.txt
+CMakeFiles/
+compile_commands.json
+
+# Runtime data and secrets: never commit these
+data/
+wallets/
+dist/
+*.wallet
+*.wallet.*
+*.seed
+*.mnemonic
+*.blk
+*.votes
+finality.dat
+
+# Temporary files
+*.tmp
+*.log
+
+# OS and editors
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*~
+*.code-workspace
+.claude-flow/
+.swarm/

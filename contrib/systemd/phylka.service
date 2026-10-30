@@ -1,0 +1,46 @@
+# PHYLKA node. Install with contrib/install-vps.sh, or by hand:
+#   sudo cp contrib/systemd/phylka.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now phylka
+#
+# Extra node flags go into /etc/default/phylka (optional file), for example
+#   PHYLKA_ARGS="--connect seed.example.org:7333"
+# Add --dev (and --port/--rpc if needed) there to run the dev network instead of main.
+[Unit]
+Description=PHYLKA (PLK) node
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=phylka
+Group=phylka
+Environment=HOME=/var/lib/phylka
+EnvironmentFile=-/etc/default/phylka
+# --public makes the P2P port listen on 0.0.0.0; the RPC/explorer port stays on 127.0.0.1 regardless.
+ExecStart=/usr/local/bin/phylka node --datadir /var/lib/phylka --public $PHYLKA_ARGS
+# SIGINT is handled by every release of the node; newer ones also handle SIGTERM.
+KillSignal=SIGINT
+TimeoutStopSec=60
+Restart=on-failure
+RestartSec=5
+
+# Hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/phylka
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+SystemCallArchitectures=native
+CapabilityBoundingSet=
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

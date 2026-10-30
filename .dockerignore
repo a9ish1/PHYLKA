@@ -1,0 +1,13 @@
+.git
+build
+build-*
+testnet
+data
+wallets
+*.wallet
+*.wallet.*
+*.seed
+*.mnemonic
+.DS_Store
+.claude-flow
+.swarm

@@ -1,0 +1,9 @@
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.bat text eol=crlf
+deps/secp256k1/** linguist-vendored
+deps/mldsa44/** linguist-vendored
+deps/pqcommon/** linguist-vendored
+deps/bip39-english.txt linguist-vendored
+src/bip39_words.inc linguist-generated
