@@ -228,6 +228,7 @@ phylka node [--dev] [--mine ADDRESS] [--threads N] [--validator] [--wallet FILE]
             [--upgrade-height N]      (--dev only; test knob for the phase 3 activation height)
 phylka wallet create|restore|address|newaddress|balance|history|send ADDRESS AMOUNT|stake AMOUNT|unstake|showseed
             [--dev] [--rpc R] [--wallet FILE]
+phylka gui [--dev] [--wallet FILE] [--rpc R] [--port P] [--no-browser]
 phylka selftest | newseed [--dev] | help
 ```
 
@@ -257,6 +258,34 @@ phylka selftest | newseed [--dev] | help
   forward that port.
 - `wallet restore` rebuilds a wallet from a seed phrase.
 - Run `phylka` with no arguments for the built-in help.
+
+## Wallet
+
+Two front ends share the same wallet code, file and keys. The seed phrase is the
+wallet; the wallet file only keeps it encrypted with your password, and every
+payment is signed inside the wallet process. The node only ever sees finished
+transactions over its local RPC.
+
+- **Command line:** `phylka wallet create|balance|send|...` (see the command reference).
+- **GUI:** `phylka gui` starts a small local web server on `127.0.0.1` and opens the
+  wallet in your browser. Everything (HTML, CSS, JavaScript, QR code generator) is
+  embedded in the binary; nothing is loaded from the internet. It offers create or
+  restore, balances and node status, receive address with QR code, send with a fee
+  preview and confirmation screen, history with links to the local explorer, staking
+  and unstaking, and a password-protected view of the recovery phrase.
+
+```sh
+./build/phylka node --dev --mine "$(./build/phylka wallet address --dev)" &   # the node, as usual
+./build/phylka gui --dev                  # prints http://127.0.0.1:17335/#t=... and opens the browser
+```
+
+`phylka gui` listens on `127.0.0.1:7335` (main) or `127.0.0.1:17335` (dev); change it
+with `--port`, use `--wallet FILE` and `--rpc R` as for the CLI, and `--no-browser` to
+only print the link. The link carries a random session token in the URL fragment;
+every API request needs it, requests with a foreign `Host` or `Origin` are refused,
+and the password is asked for each signing operation and never stored. Details:
+`docs/RUNNING.md`, section 2.1. The wallet is beta software like everything else here,
+see `DISCLAIMER.md`.
 
 ## Running a node
 
@@ -320,6 +349,7 @@ security audit**.
 
 ```
 src/              node, wallet, networking, explorer, crypto glue
+src/gui/          GUI wallet page (HTML/CSS/JS), embedded into the binary at build time
 deps/             vendored libsecp256k1, PQClean ML-DSA-44/SHA-2/SHA-3, BIP39 word list
 docs/PROTOCOL.md  protocol specification
 docs/ARCHITECTURE.md  how it works, in diagrams

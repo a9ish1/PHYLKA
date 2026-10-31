@@ -93,6 +93,51 @@ open http://127.0.0.1:17334/                # explorer (Linux: xdg-open)
 Stop with Ctrl-C. Data lives in `~/phylka/data/dev`; delete that directory to
 start from scratch.
 
+### 2.1 GUI wallet (`phylka gui`)
+
+The GUI wallet is a separate local process, not part of the node. It serves a single
+page and a JSON API on `127.0.0.1`, reads balances and history from the node's RPC and
+signs payments itself, exactly like `phylka wallet` does.
+
+```sh
+./build/phylka gui --dev                       # default port 17335 (main: 7335)
+./build/phylka gui --dev --wallet /tmp/x.wallet --rpc 17334 --port 17400 --no-browser
+```
+
+It prints a link such as `http://127.0.0.1:17335/#t=<64 hex characters>` and, unless
+`--no-browser` is given, opens it with `open` (macOS) or `xdg-open` (Linux). The
+browser is started with a one-time link that expires after 60 seconds, so the session
+token never appears in the process list. Start the node separately; if it is not
+running the page shows a banner with the command to start it. With no wallet yet the
+page offers *Create* (24 words shown once, three of them asked back, password of at
+least 10 characters entered twice) and *Restore* (24 words, optional BIP39 passphrase).
+
+Security properties:
+
+- The server binds to `127.0.0.1` only, serves at most 8 connections at once, limits
+  headers to 16 KB and bodies to 16 KB, and drops stalled requests after 10 seconds.
+- Every `/api/` request needs `Authorization: Bearer <token>` (256 random bits, compared
+  in constant time). The token travels in the URL fragment, which the browser never
+  sends to a server, and the page keeps it in memory only. Reloading keeps it (it is in
+  the address bar); closing the tab and restarting `phylka gui` invalidates it.
+- Requests must carry `Host: 127.0.0.1:PORT` or `localhost:PORT` (DNS rebinding) and,
+  if they have an `Origin`, one of `http://127.0.0.1:PORT` / `http://localhost:PORT`
+  (CSRF). Reads are `GET`, everything that changes state is `POST` with
+  `Content-Type: application/json`. There are no CORS headers.
+- Responses carry a strict `Content-Security-Policy` (`default-src 'self'`, no inline
+  script or style, no framing), `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`
+  and `Cache-Control: no-store`. The page contains no external requests.
+- Signing, creating an address, showing the recovery phrase and unlocking all need the
+  wallet password; a wrong password costs one extra second. The decrypted secret exists
+  only while the operation runs and is wiped afterwards. Nothing secret is logged. The
+  page locks itself after 10 minutes without activity and asks for the password again.
+- The password and the recovery phrase pass through your browser and the loopback
+  connection. Use a browser profile you trust, and do not run the GUI on a computer
+  other people have access to.
+
+Using it on a remote server through an SSH tunnel is possible but not recommended: keep
+the wallet and the GUI on your own computer and tunnel only the node's RPC port (see 5.9).
+
 ## 3. Local multi-node network on one machine
 
 Each node needs its **own** `--datadir`, `--port` and `--rpc`.

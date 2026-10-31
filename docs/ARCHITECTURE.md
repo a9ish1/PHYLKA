@@ -20,13 +20,17 @@ timings. The byte-level specification is in [PROTOCOL.md](PROTOCOL.md).
 ## 1. Components
 
 One binary, `phylka`, contains the node, the miner, the validator, the wallet
-and a local block explorer.
+and a local block explorer. `phylka gui` starts the wallet with a browser front end:
+a separate local process (never inside the node) that serves the embedded page and a
+token-protected JSON API on `127.0.0.1`, shares all wallet logic with the CLI
+(`wallet.cpp`), signs locally and talks to the node over the same RPC as the CLI.
 
 ```mermaid
 flowchart LR
     subgraph phylka["phylka binary"]
         CLI["CLI<br/>main.cpp"]
         Wallet["Wallet<br/>wallet.cpp<br/>BIP39 seed, encrypted file"]
+        Gui["GUI wallet<br/>gui.cpp, src/gui/<br/>local web page on 127.0.0.1 (phylka gui)"]
         Node["Node core<br/>node.cpp<br/>UTXO set, mempool, fork choice, finality"]
         Chain["Consensus rules<br/>chain.cpp, ext.cpp<br/>blocks, txs, PoW, extension"]
         Net["P2P + RPC<br/>net.cpp<br/>sync, relay, discovery, bans"]
@@ -41,6 +45,8 @@ flowchart LR
 
     CLI --> Node
     CLI --> Wallet
+    CLI --> Gui
+    Gui --> Wallet
     Wallet -- "signed tx via RPC" --> Net
     Miner --> Node
     Validator --> Node

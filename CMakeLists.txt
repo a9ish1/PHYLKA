@@ -27,7 +27,12 @@ file(GLOB MLDSA_SRC deps/mldsa44/*.c)
 add_library(pqc STATIC ${MLDSA_SRC} deps/pqcommon/fips202.c deps/pqcommon/sha2.c)
 target_include_directories(pqc PUBLIC deps/mldsa44 deps/pqcommon)
 
-add_library(plkcore STATIC src/platform.cpp src/crypto.cpp src/keys.cpp src/address.cpp src/chain.cpp src/ext.cpp src/node.cpp src/net.cpp src/wallet.cpp src/explorer.cpp)
+add_library(plkcore STATIC src/platform.cpp src/crypto.cpp src/keys.cpp src/address.cpp src/chain.cpp src/ext.cpp src/node.cpp src/net.cpp src/wallet.cpp src/explorer.cpp src/gui.cpp ${CMAKE_BINARY_DIR}/gui_assets.cpp)
+include(cmake/embed.cmake)
+plk_embed_gui(${CMAKE_BINARY_DIR}/gui_assets.cpp
+  "/|${CMAKE_SOURCE_DIR}/src/gui/index.html|text/html"
+  "/app.js|${CMAKE_SOURCE_DIR}/src/gui/app.js|text/javascript"
+  "/app.css|${CMAKE_SOURCE_DIR}/src/gui/app.css|text/css")
 target_include_directories(plkcore PUBLIC src)
 find_package(Threads REQUIRED)
 target_link_libraries(plkcore PUBLIC secp256k1 pqc Threads::Threads)

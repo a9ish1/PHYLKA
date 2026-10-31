@@ -2,6 +2,7 @@
 //   phylka selftest                 check every primitive against published test vectors (no mining)
 //   phylka newseed                  new 24-word seed phrase and its first address
 //   phylka address [index] [--dev]  address of a seed phrase (read without echo)
+//   phylka gui [--dev]              local GUI wallet (web page on 127.0.0.1)
 
 #include <algorithm>
 #include <atomic>
@@ -26,6 +27,7 @@ extern "C" {
 #include "sha2.h"
 }
 #include "arith.h"
+#include "gui.h"
 #include "net.h"
 #include "platform.h"
 #include "wallet.h"
@@ -682,6 +684,8 @@ static int selftest() {
     check(rejected, "tampered file rejected");
     check(std::search(sealed.begin(), sealed.end(), m24.begin(), m24.begin() + 7) == sealed.end(), "seed words are not stored in plain text");
 
+    gui_selftest(check);
+
     std::cout << (failures ? std::to_string(failures) + " FAILED\n" : "ALL OK\n");
     return failures ? 1 : 0;
 }
@@ -747,6 +751,8 @@ static int usage(int code) {
                  "     --public: listen on all interfaces (default: loopback only); RPC is always 127.0.0.1 only\n"
                  "     config: DIR/phylka.conf or --conf FILE, key=value lines (keys are flag names without \"--\", # starts a comment)\n"
                  "  phylka wallet create|restore|address|newaddress|balance|history|send ADDRESS AMOUNT|showseed [--dev] [--rpc R]\n"
+                 "  phylka gui [--dev] [--wallet FILE] [--rpc R] [--port P] [--no-browser]\n"
+                 "     GUI wallet: a local web page on 127.0.0.1:P (default 7335, dev 17335); it signs locally and talks to the node over RPC\n"
                  "  phylka selftest | newseed [--dev] | help\n";
     return code;
 }
@@ -788,9 +794,9 @@ int main(int argc, char** argv) {
             pos.push_back(a);
         }
     }
-    static const std::set<std::string> commands = {"selftest", "wallet", "node", "newseed", "help"};
+    static const std::set<std::string> commands = {"selftest", "wallet", "node", "newseed", "gui", "help"};
     static const std::set<std::string> flags = {"dev", "datadir", "port", "rpc", "connect", "seed", "addnode", "noseeds", "mine", "threads", "wallet",
-                                                "conf", "upgrade-height", "validator", "public", "test-equivocate", "mine-anyway", "help"};
+                                                "conf", "upgrade-height", "validator", "public", "test-equivocate", "mine-anyway", "no-browser", "help"};
     bool help = cmd == "--help" || cmd == "-h" || cmd == "help" || opt.count("help");
     for (int i = 2; i < argc; i++) if (std::string(argv[i]) == "-h") help = true;
     if (help) return usage(0);
@@ -818,6 +824,15 @@ int main(int argc, char** argv) {
     if (cmd == "wallet") {
         std::filesystem::path f = opt.count("wallet") ? opt["wallet"] : home + "/phylka/wallets/" + p.name + ".wallet";
         return wallet_command(p, f, rpc_port, pos);
+    }
+    if (cmd == "gui") {
+        if (!pos.empty()) { std::cerr << "unexpected argument: " << pos[0] << "\n"; return usage(2); }
+        GuiConfig g;
+        g.params = &p;
+        g.wallet = opt.count("wallet") ? opt["wallet"] : home + "/phylka/wallets/" + p.name + ".wallet";
+        g.rpc = rpc_port;
+        g.port = opt.count("port") ? uint16_t(std::stoi(opt["port"])) : uint16_t(p.rpc_port + 1);   // 7335 main, 17335 dev
+        return gui_command(g, !opt.count("no-browser"));
     }
     if (cmd == "node") {
         std::filesystem::path dir = opt.count("datadir") ? opt["datadir"] : home + "/phylka/data/" + p.name;

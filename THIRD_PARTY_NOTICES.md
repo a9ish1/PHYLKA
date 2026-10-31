@@ -11,6 +11,9 @@ keeps its original license. Nothing here is modified except where noted.
 | SHA-2 (`sha2.c`), SHA-3/SHAKE (`fips202.c`) and helper headers | `deps/pqcommon/` | PQClean `common/` | Public domain. The file headers state they are based on public-domain code from SUPERCOP (D. J. Bernstein; Ronny Van Keer) and TweetFips202. |
 | BIP39 English word list (2048 words) | `deps/bip39-english.txt`, `src/bip39_words.inc` | https://github.com/bitcoin/bips/blob/master/bip-0039/english.txt | Part of BIP-39, which is licensed BSD-2-Clause. SHA-256 of the list file: `2f5eed53a4727b4bf8880d8f3f199efc90e58503646d9ff8eff3a2ed3b24dbda`. |
 
+The GUI wallet (`src/gui/`, `src/gui.cpp`) vendors nothing: its QR code encoder (byte mode, error correction level M,
+versions 1-6) is original PHYLKA code written after ISO/IEC 18004 and is covered by the project license.
+
 ## libsecp256k1 (MIT)
 
 ```

@@ -129,28 +129,6 @@ static std::string ask(const char* prompt) {
     return platform::read_secret(prompt, true);
 }
 
-static std::string plk_amount(int64_t fyl) {
-    char b[48];
-    uint64_t a = uint64_t(fyl < 0 ? -fyl : fyl);
-    std::snprintf(b, sizeof b, "%s%llu.%08llu", fyl < 0 ? "-" : "", (unsigned long long)(a / COIN), (unsigned long long)(a % COIN));
-    std::string s = b;
-    while (s.back() == '0') s.pop_back();
-    if (s.back() == '.') s.pop_back();
-    return s + " PLK";
-}
-
-static uint64_t parse_amount(const std::string& s) {
-    auto dot = s.find('.');
-    std::string whole = s.substr(0, dot), frac = dot == std::string::npos ? "" : s.substr(dot + 1);
-    if (whole.empty() || whole.find_first_not_of("0123456789") != std::string::npos ||
-        frac.find_first_not_of("0123456789") != std::string::npos || frac.size() > 8)
-        throw std::runtime_error("amount must be a number with at most 8 decimal places");
-    frac.resize(8, '0');
-    uint64_t v = std::stoull(whole) * COIN + std::stoull(frac);
-    if (v == 0 || v > MAX_MONEY) throw std::runtime_error("invalid amount");
-    return v;
-}
-
 static std::string new_password() {
     for (;;) {
         std::string a = secret("Wallet file password (at least 10 characters): ", "PHYLKA_TEST_PASSWORD");
@@ -161,81 +139,108 @@ static std::string new_password() {
     }
 }
 
-// ---------------------------------------------------------------- wallet state
+// ---------------------------------------------------------------- shared wallet logic
 
-struct WalletFile {
-    fs::path path;
-    Bytes sealed;
-    uint32_t addresses = 1;   // how many receive addresses have been handed out (stored next to the wallet)
+std::string format_plk(int64_t fyl) {
+    char b[48];
+    uint64_t a = uint64_t(fyl < 0 ? -fyl : fyl);
+    std::snprintf(b, sizeof b, "%s%llu.%08llu", fyl < 0 ? "-" : "", (unsigned long long)(a / COIN), (unsigned long long)(a % COIN));
+    std::string s = b;
+    while (s.back() == '0') s.pop_back();
+    if (s.back() == '.') s.pop_back();
+    return s + " PLK";
+}
 
-    fs::path idx() const { return fs::path(path.string() + ".idx"); }
-    bool exists() const { return fs::exists(path); }
-    void load() {
-        std::ifstream f(path, std::ios::binary);
-        sealed.assign(std::istreambuf_iterator<char>(f), std::istreambuf_iterator<char>());
-        std::ifstream i(idx());
-        if (i) i >> addresses;
-        if (addresses < 1) addresses = 1;
-    }
-    /// The file is created with mode 0600 from the start (never briefly readable by others)
-    void write_private(const Bytes& data) const {
+uint64_t parse_amount(const std::string& s) {
+    auto dot = s.find('.');
+    std::string whole = s.substr(0, dot), frac = dot == std::string::npos ? "" : s.substr(dot + 1);
+    if (whole.empty() || whole.size() > 10 || whole.find_first_not_of("0123456789") != std::string::npos ||
+        frac.find_first_not_of("0123456789") != std::string::npos || frac.size() > 8)
+        throw std::runtime_error("amount must be a number with at most 8 decimal places");
+    frac.resize(8, '0');
+    uint64_t v = std::stoull(whole) * COIN + std::stoull(frac);
+    if (v == 0 || v > MAX_MONEY) throw std::runtime_error("invalid amount");
+    return v;
+}
+
+fs::path WalletFile::idx() const { return fs::path(path.string() + ".idx"); }
+bool WalletFile::exists() const { return fs::exists(path); }
+
+void WalletFile::load() {
+    std::ifstream f(path, std::ios::binary);
+    sealed.assign(std::istreambuf_iterator<char>(f), std::istreambuf_iterator<char>());
+    std::ifstream i(idx());
+    if (i) i >> addresses;
+    if (addresses < 1) addresses = 1;
+}
+
+void WalletFile::write_private(const Bytes& data) const {
 #ifndef _WIN32
-        int fd = ::open(path.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0600);
-        if (fd < 0) throw std::runtime_error("cannot create wallet file");
-        ::fchmod(fd, 0600);   // also tightens a pre-existing file
-        size_t off = 0;
-        while (off < data.size()) {
-            ssize_t w = ::write(fd, data.data() + off, data.size() - off);
-            if (w <= 0) { ::close(fd); throw std::runtime_error("cannot write wallet file"); }
-            off += size_t(w);
-        }
-        ::close(fd);
+    int fd = ::open(path.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    if (fd < 0) throw std::runtime_error("cannot create wallet file");
+    ::fchmod(fd, 0600);   // also tightens a pre-existing file
+    size_t off = 0;
+    while (off < data.size()) {
+        ssize_t w = ::write(fd, data.data() + off, data.size() - off);
+        if (w <= 0) { ::close(fd); throw std::runtime_error("cannot write wallet file"); }
+        off += size_t(w);
+    }
+    ::close(fd);
 #else
-        std::ofstream(path, std::ios::binary).write(reinterpret_cast<const char*>(data.data()), data.size());
-        fs::permissions(path, fs::perms::owner_read | fs::perms::owner_write);
+    std::ofstream(path, std::ios::binary).write(reinterpret_cast<const char*>(data.data()), data.size());
+    fs::permissions(path, fs::perms::owner_read | fs::perms::owner_write);
 #endif
-    }
-    void save() const {
-        fs::create_directories(path.parent_path());
-        write_private(sealed);
-        std::ofstream(idx()) << addresses << "\n";
-    }
-};
+}
 
-static Bytes seed_of(const WalletSecret& s) { return bip39::to_seed(s.mnemonic, s.passphrase); }
+void WalletFile::save() const {
+    fs::create_directories(path.parent_path());
+    write_private(sealed);
+    std::ofstream(idx()) << addresses << "\n";
+}
 
-/// Public data needed without a password: addresses are cached next to the wallet (no secrets)
-static std::vector<std::string> cached_addresses(const WalletFile& w) {
+Bytes wallet_seed(const WalletSecret& s) { return bip39::to_seed(s.mnemonic, s.passphrase); }
+
+std::vector<std::string> wallet_addresses(const WalletFile& w) {
     std::vector<std::string> out;
     std::ifstream f(w.path.string() + ".addr");
     for (std::string a; std::getline(f, a);) if (!a.empty()) out.push_back(a);
     return out;
 }
 
-static void cache_addresses(const WalletFile& w, const ChainParams& p, const Bytes& seed) {
+void wallet_cache_addresses(const WalletFile& w, const ChainParams& p, const Bytes& seed) {
     std::ofstream f(w.path.string() + ".addr");
     for (uint32_t i = 0; i < w.addresses; i++)
         f << Address{ADDRESS_VERSION_HYBRID, HybridKey::derive(seed, i).pub().program()}.str(p.hrp) << "\n";
 }
 
-struct Utxo {
-    OutPoint op;
-    uint64_t value;
-    uint32_t conf;
-    bool coinbase, mature;
-    uint32_t index;   // which wallet address
-    int version = ADDRESS_VERSION_HYBRID;   // 2 = locked validator stake
-};
+void wallet_create(WalletFile& w, const ChainParams& p, const WalletSecret& s, const std::string& password) {
+    if (password.size() < MIN_PASSWORD_LEN) throw std::runtime_error("password must have at least 10 characters");
+    w.sealed = vault::seal(s, password);
+    w.addresses = 1;
+    w.save();
+    Bytes seed = wallet_seed(s);
+    wallet_cache_addresses(w, p, seed);
+    wipe(seed.data(), seed.size());
+}
 
-static std::vector<Utxo> fetch_utxos(uint16_t rpc, const std::vector<std::string>& addrs) {
-    std::vector<Utxo> out;
+std::string wallet_new_address(WalletFile& w, const ChainParams& p, const WalletSecret& s) {
+    if (wallet_addresses(w).size() >= w.addresses) w.addresses++;
+    w.save();
+    Bytes seed = wallet_seed(s);
+    wallet_cache_addresses(w, p, seed);
+    wipe(seed.data(), seed.size());
+    return wallet_addresses(w).back();
+}
+
+std::vector<WalletUtxo> wallet_fetch_utxos(uint16_t rpc, const std::vector<std::string>& addrs) {
+    std::vector<WalletUtxo> out;
     for (uint32_t i = 0; i < addrs.size(); i++) {
         std::istringstream in(http_get(rpc, "/utxos?addr=" + addrs[i]));
         for (std::string line; std::getline(in, line);) {
             if (line.rfind("error", 0) == 0) throw std::runtime_error(line.substr(6));
             std::istringstream l(line);
             std::string txid;
-            Utxo u{};
+            WalletUtxo u{};
             int cb, mat;
             l >> txid >> u.op.vout >> u.value >> u.conf >> cb >> mat;
             if (!(l >> u.version)) u.version = ADDRESS_VERSION_HYBRID;
@@ -251,15 +256,101 @@ static std::vector<Utxo> fetch_utxos(uint16_t rpc, const std::vector<std::string
     return out;
 }
 
+std::vector<WalletUtxo> wallet_spendable(const std::vector<WalletUtxo>& all) {
+    std::vector<WalletUtxo> v;
+    for (auto& x : all) if (x.mature && x.version == ADDRESS_VERSION_HYBRID) v.push_back(x);
+    return v;
+}
+
+std::vector<WalletUtxo> wallet_unlockable_stakes(const ChainParams& p, const std::vector<WalletUtxo>& all) {
+    std::vector<WalletUtxo> v;
+    for (auto& x : all) if (x.version == ADDRESS_VERSION_STAKE && x.conf >= p.stake_lock) v.push_back(x);
+    return v;
+}
+
+WalletBalance wallet_balance(const ChainParams& p, const std::vector<WalletUtxo>& utxos) {
+    WalletBalance b;
+    for (auto& x : utxos) {
+        if (x.version == ADDRESS_VERSION_STAKE) {
+            b.staked += x.value;
+            if (x.conf >= p.stake_lock) b.unlockable += x.value;
+            continue;
+        }
+        (x.mature ? b.spendable : b.immature) += x.value;
+        b.per_address[x.index] += x.value;
+    }
+    return b;
+}
+
+PaymentPlan wallet_plan_payment(std::vector<WalletUtxo> coins, uint64_t amount, bool send_all, uint64_t rate) {
+    std::sort(coins.begin(), coins.end(), [](auto& a, auto& b) { return a.value > b.value; });
+    PaymentPlan r;
+    for (auto& c : coins) {   // ~3.8 KB per hybrid input
+        r.use.push_back(c);
+        r.in_sum += c.value;
+        r.fee = (100 + 3866 * r.use.size()) * rate;   // real size: 93 + 3866 per hybrid input with change (relay minimum is 1 fyl per byte)
+        if (!send_all && r.in_sum >= amount + r.fee) break;
+    }
+    if (send_all) {
+        if (r.in_sum <= r.fee) throw std::runtime_error("nothing to withdraw: available " + format_plk(int64_t(r.in_sum)));
+        amount = r.in_sum - r.fee;
+    }
+    if (r.in_sum < amount + r.fee)
+        throw std::runtime_error("insufficient funds: available " + format_plk(int64_t(r.in_sum)) + ", need " + format_plk(int64_t(amount + r.fee)));
+    r.amount = amount;
+    return r;
+}
+
+Transaction wallet_sign_payment(const ChainParams& p, const WalletSecret& s, const std::vector<std::string>& addrs, const PaymentPlan& plan,
+                                const Address& to) {
+    Bytes seed = wallet_seed(s);
+    Transaction t;
+    std::vector<TxOut> spent;
+    for (auto& c : plan.use) {
+        t.vin.push_back(TxIn{c.op, {}});
+        Address a = *Address::parse(addrs[c.index], p.hrp);
+        a.version = c.version;   // the signature covers the exact output being spent
+        spent.push_back(TxOut{c.value, a});
+    }
+    t.vout.push_back(TxOut{plan.amount, to});
+    uint64_t change = plan.in_sum - plan.amount - plan.fee;
+    if (change > 0) t.vout.push_back(TxOut{change, *Address::parse(addrs[0], p.hrp)});
+    for (size_t i = 0; i < plan.use.size(); i++) t.sign(i, HybridKey::derive(seed, plan.use[i].index), spent);
+    wipe(seed.data(), seed.size());
+    return t;
+}
+
+std::string wallet_submit(uint16_t rpc, const Transaction& t) {
+    std::string r = http_get(rpc, "/send?tx=" + to_hex(t.serialize()));
+    if (r.rfind("ok ", 0) != 0) throw std::runtime_error("node rejected: " + r.substr(r.find(' ') + 1));
+    std::string id = r.substr(3);
+    while (!id.empty() && (id.back() == '\n' || id.back() == '\r')) id.pop_back();
+    return id;
+}
+
+std::vector<HistoryRow> wallet_history(uint16_t rpc, const std::string& addr) {
+    std::vector<HistoryRow> out;
+    std::istringstream in(http_get(rpc, "/history?addr=" + addr));
+    for (std::string line; std::getline(in, line);) {
+        if (line.rfind("error", 0) == 0) throw std::runtime_error(line.substr(6));
+        std::istringstream l(line);
+        HistoryRow r;
+        l >> r.height >> r.time >> r.txid >> r.delta >> r.kind;
+        out.push_back(r);
+    }
+    return out;
+}
+
 HybridKey validator_key(const ChainParams& p, const fs::path& file) {
     g_params = &p;
-    WalletFile w{file};
+    WalletFile w;
+    w.path = file;
     if (!w.exists()) throw std::runtime_error("no wallet: " + file.string());
     w.load();
     std::string pw = secret("Wallet password (to sign validator votes): ", "PHYLKA_TEST_PASSWORD");
     WalletSecret s = vault::open(w.sealed, pw);
     wipe(pw.data(), pw.size());
-    Bytes seed = seed_of(s);
+    Bytes seed = wallet_seed(s);
     HybridKey k = HybridKey::derive(seed, 0);
     wipe(seed.data(), seed.size());
     return k;
@@ -269,7 +360,8 @@ HybridKey validator_key(const ChainParams& p, const fs::path& file) {
 
 int wallet_command(const ChainParams& p, const fs::path& file, uint16_t rpc, const std::vector<std::string>& args) {
     g_params = &p;
-    WalletFile w{file};
+    WalletFile w;
+    w.path = file;
     std::string cmd = args.empty() ? "" : args[0];
     try {
         if (cmd == "create" || cmd == "restore") {
@@ -303,19 +395,14 @@ int wallet_command(const ChainParams& p, const fs::path& file, uint16_t rpc, con
                 s.passphrase = test_env("PHYLKA_TEST_MNEMONIC").empty() ? secret("BIP39 passphrase (Enter for none): ") : "";
             }
             std::string pw = new_password();
-            w.sealed = vault::seal(s, pw);
+            wallet_create(w, p, s, pw);
             wipe(pw.data(), pw.size());
-            w.addresses = 1;
-            w.save();
-            Bytes seed = seed_of(s);
-            cache_addresses(w, p, seed);
-            wipe(seed.data(), seed.size());
-            std::cout << "Wallet saved: " << file.string() << "\nReceiving address: " << cached_addresses(w)[0] << "\n";
+            std::cout << "Wallet saved: " << file.string() << "\nReceiving address: " << wallet_addresses(w)[0] << "\n";
             return 0;
         }
         if (!w.exists()) throw std::runtime_error("no wallet - create one: phylka wallet create");
         w.load();
-        auto addrs = cached_addresses(w);
+        auto addrs = wallet_addresses(w);
         if (addrs.size() < w.addresses) throw std::runtime_error("address list is corrupted - run: phylka wallet newaddress");
 
         if (cmd == "address") {
@@ -326,97 +413,41 @@ int wallet_command(const ChainParams& p, const fs::path& file, uint16_t rpc, con
             std::string pw = secret("Wallet password: ", "PHYLKA_TEST_PASSWORD");
             WalletSecret s = vault::open(w.sealed, pw);
             wipe(pw.data(), pw.size());
-            if (addrs.size() >= w.addresses) w.addresses++;
-            w.save();
-            Bytes seed = seed_of(s);
-            cache_addresses(w, p, seed);
-            wipe(seed.data(), seed.size());
-            std::cout << cached_addresses(w).back() << "\n";
+            std::cout << wallet_new_address(w, p, s) << "\n";
             return 0;
         }
         if (cmd == "balance") {
-            auto u = fetch_utxos(rpc, addrs);
-            uint64_t spendable = 0, immature = 0, staked = 0, unlockable = 0;
-            std::map<uint32_t, uint64_t> per;
-            for (auto& x : u) {
-                if (x.version == ADDRESS_VERSION_STAKE) {
-                    staked += x.value;
-                    if (x.conf >= p.stake_lock) unlockable += x.value;
-                    continue;
-                }
-                (x.mature ? spendable : immature) += x.value;
-                per[x.index] += x.value;
-            }
-            std::cout << "Available:      " << plk_amount(int64_t(spendable)) << "\n";
-            if (immature) std::cout << "Maturing:       " << plk_amount(int64_t(immature)) << "  (mined, waiting for " << p.coinbase_maturity << " blocks)\n";
-            if (staked)
-                std::cout << "Staked:         " << plk_amount(int64_t(staked)) << "  (withdrawable " << plk_amount(int64_t(unlockable))
+            WalletBalance bal = wallet_balance(p, wallet_fetch_utxos(rpc, addrs));
+            std::cout << "Available:      " << format_plk(int64_t(bal.spendable)) << "\n";
+            if (bal.immature) std::cout << "Maturing:       " << format_plk(int64_t(bal.immature)) << "  (mined, waiting for " << p.coinbase_maturity << " blocks)\n";
+            if (bal.staked)
+                std::cout << "Staked:         " << format_plk(int64_t(bal.staked)) << "  (withdrawable " << format_plk(int64_t(bal.unlockable))
                           << ", stake locked for " << p.stake_lock << " blocks)\n";
             for (uint32_t i = 0; i < addrs.size(); i++)
-                std::cout << "  #" << i << "  " << addrs[i] << "  " << plk_amount(int64_t(per[i])) << "\n";
+                std::cout << "  #" << i << "  " << addrs[i] << "  " << format_plk(int64_t(bal.per_address[i])) << "\n";
             return 0;
         }
         if (cmd == "history") {
-            for (auto& a : addrs) {
-                std::istringstream in(http_get(rpc, "/history?addr=" + a));
-                for (std::string line; std::getline(in, line);) {
-                    std::istringstream l(line);
-                    std::string h, time, txid, kind;
-                    long long delta;
-                    l >> h >> time >> txid >> delta >> kind;
-                    std::cout << (h == "pending" ? "pending" : "block " + h) << "  " << plk_amount(delta) << "  "
-                              << (kind == "mined" ? "mined" : "transfer") << "  " << txid.substr(0, 16) << "…\n";
-                }
-            }
+            for (auto& a : addrs)
+                for (auto& r : wallet_history(rpc, a))
+                    std::cout << (r.height == "pending" ? "pending" : "block " + r.height) << "  " << format_plk(r.delta) << "  "
+                              << (r.kind == "mined" ? "mined" : "transfer") << "  " << r.txid.substr(0, 16) << "…\n";
             return 0;
         }
-        // Builds, confirms, signs and broadcasts a payment from `coins` (largest first)
-        auto pay = [&](const Address& to, uint64_t amount, bool send_all, std::vector<Utxo> coins, uint64_t rate, const std::string& what) {
-            std::sort(coins.begin(), coins.end(), [](auto& a, auto& b) { return a.value > b.value; });
-            std::vector<Utxo> use;
-            uint64_t in_sum = 0, fee = 0;
-            for (auto& c : coins) {   // ~3.8 KB per hybrid input
-                use.push_back(c);
-                in_sum += c.value;
-                fee = (100 + 3866 * use.size()) * rate;   // real size: 93 + 3866 per hybrid input with change (relay minimum is 1 fyl per byte)
-                if (!send_all && in_sum >= amount + fee) break;
-            }
-            if (send_all) {
-                if (in_sum <= fee) throw std::runtime_error("nothing to withdraw: available " + plk_amount(int64_t(in_sum)));
-                amount = in_sum - fee;
-            }
-            if (in_sum < amount + fee)
-                throw std::runtime_error("insufficient funds: available " + plk_amount(int64_t(in_sum)) + ", need " + plk_amount(int64_t(amount + fee)));
-            std::cout << what << " " << plk_amount(int64_t(amount)) << "\n  to:       " << to.str(p.hrp) << "\n  fee:      "
-                      << plk_amount(int64_t(fee)) << "  (" << use.size() << " input(s))\n";
+        // Plans, confirms, signs and broadcasts a payment from `coins` (largest first)
+        auto pay = [&](const Address& to, uint64_t amount, bool send_all, std::vector<WalletUtxo> coins, uint64_t rate, const std::string& what) {
+            PaymentPlan plan = wallet_plan_payment(std::move(coins), amount, send_all, rate);
+            std::cout << what << " " << format_plk(int64_t(plan.amount)) << "\n  to:       " << to.str(p.hrp) << "\n  fee:      "
+                      << format_plk(int64_t(plan.fee)) << "  (" << plan.use.size() << " input(s))\n";
             if (ask("Confirm? [y/N] ") != "y") { std::cout << "Cancelled.\n"; return 1; }
             std::string pw = secret("Wallet password: ", "PHYLKA_TEST_PASSWORD");
             WalletSecret s = vault::open(w.sealed, pw);
             wipe(pw.data(), pw.size());
-            Bytes seed = seed_of(s);
-            Transaction t;
-            std::vector<TxOut> spent;
-            for (auto& c : use) {
-                t.vin.push_back(TxIn{c.op, {}});
-                Address a = *Address::parse(addrs[c.index], p.hrp);
-                a.version = c.version;   // the signature covers the exact output being spent
-                spent.push_back(TxOut{c.value, a});
-            }
-            t.vout.push_back(TxOut{amount, to});
-            uint64_t change = in_sum - amount - fee;
-            if (change > 0) t.vout.push_back(TxOut{change, *Address::parse(addrs[0], p.hrp)});
-            for (size_t i = 0; i < use.size(); i++) t.sign(i, HybridKey::derive(seed, use[i].index), spent);
-            wipe(seed.data(), seed.size());
-            std::string r = http_get(rpc, "/send?tx=" + to_hex(t.serialize()));
-            if (r.rfind("ok ", 0) != 0) throw std::runtime_error("node rejected: " + r.substr(r.find(' ') + 1));
-            std::cout << "Sent. Transaction " << r.substr(3);
+            Transaction t = wallet_sign_payment(p, s, addrs, plan, to);
+            std::cout << "Sent. Transaction " << wallet_submit(rpc, t) << "\n";
             return 0;
         };
-        auto spendable = [&] {
-            std::vector<Utxo> v;
-            for (auto& x : fetch_utxos(rpc, addrs)) if (x.mature && x.version == ADDRESS_VERSION_HYBRID) v.push_back(x);
-            return v;
-        };
+        auto spendable = [&] { return wallet_spendable(wallet_fetch_utxos(rpc, addrs)); };
         if (cmd == "send") {
             if (args.size() < 3) throw std::runtime_error("usage: phylka wallet send ADDRESS AMOUNT [fee_rate_fyl_per_byte]");
             auto to = Address::parse(args[1], p.hrp);
@@ -426,16 +457,14 @@ int wallet_command(const ChainParams& p, const fs::path& file, uint16_t rpc, con
         if (cmd == "stake") {
             if (args.size() < 2) throw std::runtime_error("usage: phylka wallet stake AMOUNT");
             uint64_t amount = parse_amount(args[1]);
-            if (amount < p.min_stake) throw std::runtime_error("minimum stake is " + plk_amount(int64_t(p.min_stake)));
+            if (amount < p.min_stake) throw std::runtime_error("minimum stake is " + format_plk(int64_t(p.min_stake)));
             Address stake{ADDRESS_VERSION_STAKE, Address::parse(addrs[0], p.hrp)->program};
             std::cout << "The stake is locked for " << p.stake_lock << " blocks and starts counting after " << p.stake_activation
                       << ". Start the node with --validator to vote.\n";
             return pay(stake, amount, false, spendable(), 1, "Staking");
         }
         if (cmd == "unstake") {
-            std::vector<Utxo> v;
-            for (auto& x : fetch_utxos(rpc, addrs))
-                if (x.version == ADDRESS_VERSION_STAKE && x.conf >= p.stake_lock) v.push_back(x);
+            auto v = wallet_unlockable_stakes(p, wallet_fetch_utxos(rpc, addrs));
             if (v.empty()) throw std::runtime_error("no stakes whose lock period has expired");
             return pay(*Address::parse(addrs[0], p.hrp), 0, true, v, 1, "Unstaking");
         }
