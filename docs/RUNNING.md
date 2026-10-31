@@ -190,18 +190,15 @@ runtime.
 
 ### Joining the existing PHYLKA main network
 
-Be aware of the current state: there is **no peer discovery and no built-in
-public seed node**. To join main you need the `host:port` of at least one node
-that someone is already running (normally `host:7333`), obtained from the
-project maintainers or the community. Then:
+The node has a built-in seed node, `149.56.215.9:7333`, and finds further peers
+by itself (addr gossip, remembered in `peers.dat`). Joining is just:
 
 ```sh
-./build/phylka node --connect HOST:7333 --public
+./build/phylka node                 # add --public if your node is reachable from the internet
 ```
 
-If nobody is running a reachable main node, there is nothing to join; you would
-be the first, and the section below on running your own seed node applies.
-Run a main node first without mining and watch the log to see whether it
+Use `--seed HOST:7333` (repeatable) to add more known nodes, or `--noseeds` to
+ignore the built-in one. Run a main node first without mining and watch the log to see whether it
 syncs (`curl -s http://127.0.0.1:7334/api/info` shows `height` and `peers`).
 
 ### Starting a private network

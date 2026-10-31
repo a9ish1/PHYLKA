@@ -20,8 +20,8 @@ const ChainParams& ChainParams::main() {
                          // counts after 6 blocks; at least 10 PLK per validator and 100 PLK in total before finality starts
                          6, 2, 1008, 6, 10 * COIN, 100 * COIN,
                          // phase 3 rules activate at height 1000 (the main chain is far below), 10% of fees go to voters.
-                         // Built-in seed nodes: add "host:port" strings here once real seed nodes exist (deliberately empty now).
-                         1000, 10, {},
+                         // Built-in seed nodes ("host:port"); nodes dial them at start unless --noseeds is given.
+                         1000, 10, {"149.56.215.9:7333"},
                          // Checkpoints lock the network to this chain. Before each release add the newest block that is
                          // buried deep (e.g. 100+ blocks): { height, "hash in display order" }, keeping the list ascending.
                          {{0, "00000000df01a464bd9f7ad30b88da74059e25ea5b60eccaac0f95f2ba1a70a0"},

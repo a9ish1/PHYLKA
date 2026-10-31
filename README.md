@@ -236,7 +236,7 @@ phylka selftest | newseed [--dev] | help
   `--help` / `-h` print the usage and exit. Nothing is ever started by accident.
 - `--connect`, `--addnode` and `--seed` take `host:port`; DNS names are resolved
   on every connection attempt. They are dialled in addition to the built-in seed
-  list (`ChainParams::seeds`, empty on main until real seed nodes exist);
+  list (`ChainParams::seeds`: on main `149.56.215.9:7333`);
   `--noseeds` ignores the built-in list.
 - Config file: `DIR/phylka.conf` (or `--conf FILE`), one `key=value` per line,
   keys are the long flags without `--` (`# comment` allowed; `connect`, `seed`
@@ -304,8 +304,10 @@ Full step-by-step guide: **[docs/RUNNING.md](docs/RUNNING.md)**. Short version:
   Open only `7333/tcp`; the RPC/explorer port 7334 is loopback-only and must never be
   exposed. Reach it with `ssh -L 7334:127.0.0.1:7334 you@vps`.
 - **Docker (untested):** `docker build -t phylka . && docker run -d -p 7333:7333 -v phylka-data:/data phylka`
-- **Joining the PHYLKA main network:** `phylka node --public --seed HOST:7333`
-  with the address of any running node (or `seed=` lines in `phylka.conf`).
+- **Joining the PHYLKA main network:** just run `phylka node`. It dials the
+  built-in seed node `149.56.215.9:7333` and then discovers other peers by itself.
+  Add `--seed HOST:7333` for more nodes; add `--public` if your node is reachable
+  from the internet and should accept peers.
   After the first connection nodes discover each other automatically.
 - **Wallets belong on your own computer**, not on the server. The 24-word seed on
   paper is the only real backup.
@@ -338,8 +340,8 @@ with rate limiting, ban scoring and peer discovery, hybrid-signature wallet,
 validator staking, finality votes and on-chain certificates, slashing, UTXO
 commitments, hard-coded checkpoints, local explorer and `selftest`.
 
-Known gaps: no pool/stratum bridge, no public seed nodes yet (the list in
-`src/chain.cpp` is empty), UTXO commitment is recomputed in full per block and
+Known gaps: no pool/stratum bridge, only one public seed node so far
+(`149.56.215.9:7333`), UTXO commitment is recomputed in full per block and
 the UTXO set is rebuilt by replaying the chain at start-up (fine for a young
 chain, not for a large one), no reproducible-build or release pipeline, Linux
 and Windows builds not qualified, no long public testnet, **no external
