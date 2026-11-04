@@ -14,7 +14,9 @@ genesis block.
 **How it works, in diagrams:** [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) ·
 **Why PHYLKA, its dogmas and honest trade-offs:** [docs/WHY.md](docs/WHY.md) ·
 **Run a node locally or on a VPS:** [docs/RUNNING.md](docs/RUNNING.md) ·
-**Protocol:** [docs/PROTOCOL.md](docs/PROTOCOL.md)
+**Protocol:** [docs/PROTOCOL.md](docs/PROTOCOL.md) ·
+**Proposals:** [docs/proposals](docs/proposals) ·
+**Audit plan:** [below](#security-audit-plan)
 
 ## Dogmas
 
@@ -292,6 +294,11 @@ see `DISCLAIMER.md`.
 
 Full step-by-step guide: **[docs/RUNNING.md](docs/RUNNING.md)**. Short version:
 
+- **macOS, no build needed (test coins only):** download `phylka-mac-dev.zip` from
+  [release v0.1.1-beta](https://github.com/a9ish1/PHYLKA/releases/tag/v0.1.1-beta), unzip
+  it, right-click **PHYLKA Wallet (dev).command** and choose Open. It starts a dev-network
+  node and opens the GUI wallet. To mine test coins, use
+  **PHYLKA Wallet + Mining (dev).command**.
 - **Local dev network (one machine, macOS or Linux):**
   ```sh
   cmake -S . -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build --parallel
@@ -348,6 +355,37 @@ chain, not for a large one), no reproducible-build or release pipeline, Linux
 and Windows builds not qualified, no long public testnet, **no external
 security audit**.
 
+## Proposals
+
+**[PIP-0001: one hybrid signature per key](docs/proposals/PIP-0001-per-key-signatures.md)**
+removes repeated keys and signatures when a transaction spends several outputs of one key.
+Both Schnorr and ML-DSA-44 stay mandatory for every key that spends.
+
+- In a test on the dev network, 13 inputs of one key took 4 403 bytes instead of 50 351.
+  There is no gain when every input has a different key.
+- **Status: implemented and tested on the dev network, disabled on every network.** No
+  activation height is set. It would be a hard fork, so all nodes must upgrade first.
+- Real savings are not known yet, because the chains have almost no spending to measure.
+
+## Security audit plan
+
+**PHYLKA has not been audited.** This is the intended order of work, not a promise or a
+schedule. No audit has been ordered and no budget is secured.
+
+1. **Automated checks in CI:** sanitizers (ASan, UBSan, TSan), fuzzing of block, transaction
+   and P2P parsers, and static analysis.
+2. **Public testnet:** several months of independent nodes and attempts to break the network,
+   with a small bug bounty if funds allow.
+3. **Protocol freeze:** decide on open proposals, write a threat model and fix the audited
+   commit.
+4. **Focused external audit:** consensus rules, the hybrid signature construction and finality
+   first, then P2P and the wallet.
+5. **Fixes and publication:** fix the findings, have the fixes reviewed and publish the full
+   report in this repository.
+
+The beta label stays until these steps are done, see [DISCLAIMER.md](DISCLAIMER.md).
+Please report vulnerabilities privately, see [SECURITY.md](SECURITY.md).
+
 ## Repository layout
 
 ```
@@ -358,8 +396,9 @@ docs/PROTOCOL.md  protocol specification
 docs/ARCHITECTURE.md  how it works, in diagrams
 docs/RUNNING.md   build and run locally, on a VPS or in Docker
 docs/WHY.md       dogmas, comparison, advantages and trade-offs
+docs/proposals/   protocol change proposals (PIP)
 contrib/          VPS installer, systemd unit, local testnet script
-tests/            multi-node test scripts (dev network)
+tests/            multi-node test scripts (dev network), block benchmark
 DISCLAIMER.md     beta status: testing, qualification, validation, audit
 ```
 
