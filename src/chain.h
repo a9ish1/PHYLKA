@@ -48,7 +48,10 @@ struct ChainParams {
     // Hard-coded checkpoints (height, block hash in display order): a block at such a height with another hash is invalid
     // and no chain that diverges below the highest checkpoint is ever activated.
     std::vector<std::pair<uint32_t, std::string>> checkpoints;
+    // PIP-0001 (one hybrid signature per key): disabled until an activation height is chosen for a release
+    uint32_t sigv2_height = UINT32_MAX;
     bool upgraded(uint32_t height) const { return height >= upgrade_height; }
+    bool sigv2(uint32_t height) const { return height >= sigv2_height; }
 
     static const ChainParams& main();
     static const ChainParams& dev();
@@ -84,7 +87,7 @@ struct Transaction {
     std::vector<TxIn> vin;
     std::vector<TxOut> vout;
     uint32_t locktime = 0;
-    std::vector<Witness> witness;   // one per input; empty for the coinbase
+    std::vector<Witness> witness;   // one per input (version 2 from sigv2_height: one per key); empty for the coinbase
 
     Bytes serialize(bool with_witness = true) const;
     static std::optional<Transaction> parse(const Bytes& b, size_t& pos);
@@ -98,6 +101,16 @@ struct Transaction {
     void sign(size_t index, const HybridKey& key, const std::vector<TxOut>& spent);
     /// Checks keys match the spent address and both signatures are valid
     bool verify_input(size_t index, const std::vector<TxOut>& spent, std::string* why = nullptr) const;
+
+    // ---- PIP-0001: version 2 transactions from sigv2_height
+    /// Distinct key programs of the spent outputs, in order of first appearance. The witness list follows this order.
+    static std::vector<Hash256> key_groups(const std::vector<TxOut>& spent);
+    /// What the key with this program signs: the network, the transaction, every spent output and the program itself
+    Hash256 sighash_v2(const Hash256& genesis, const Hash256& program, const std::vector<TxOut>& spent) const;
+    /// Signs for this key's group. The transaction must already have version 2, all inputs and all outputs.
+    void sign_v2(const Hash256& genesis, const HybridKey& key, const std::vector<TxOut>& spent);
+    /// Checks one witness per key group: keys match the group and both signatures are valid
+    bool verify_v2(const Hash256& genesis, const std::vector<TxOut>& spent, std::string* why = nullptr) const;
 };
 
 struct BlockHeader {

@@ -229,6 +229,8 @@ private:
     void mem_trim();
     bool mem_full_for(size_t size, uint64_t fee) const;
     void reload_mempool(std::vector<Transaction> returned);
+    /// PIP-0001: does this transaction use one signature per key in a block at this height?
+    bool sigs_grouped(const Transaction& t, uint32_t height) const { return p_.sigv2(height) && t.version == 2; }
     StakeSet snapshot(uint32_t checkpoint) const;
     bool allowed_by_finality(const BlockIndex* b) const;
     /// A block off the active chain that buffered votes of > 2/3 of our stake name (the winning branch of a split)
@@ -240,6 +242,7 @@ private:
 
     const ChainParams& p_;
     Hash256 genesis_hash_{};
+    bool mem_sigv2_ = false;   // signature rules the mempool was last checked under (height() + 1)
     std::filesystem::path dir_;
     mutable std::mutex m_;
     std::map<Hash256, std::unique_ptr<BlockIndex>> index_;

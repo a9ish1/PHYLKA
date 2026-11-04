@@ -14,7 +14,7 @@ build_variant() {  # name sed-expression
   local v=$S/$1
   if [ ! -x "$v/build/phylka" ]; then
     rm -rf "$v"; mkdir -p "$v"
-    cp -R "$SRC/src" "$SRC/deps" "$SRC/CMakeLists.txt" "$v/"
+    cp -R "$SRC/src" "$SRC/deps" "$SRC/cmake" "$SRC/CMakeLists.txt" "$v/"
     [ -e "$SRC/contrib" ] && cp -R "$SRC/contrib" "$v/"
     cp "$v/src/chain.cpp" "$v/chain.orig"
     sed -i.bak "$2" "$v/src/chain.cpp"; rm -f "$v/src/chain.cpp.bak"
@@ -25,6 +25,7 @@ build_variant() {  # name sed-expression
 }
 ALT=${PLK_ALT_BIN:-$(build_variant altgen '/17333, 17334, GENESIS_TEXT, 1793000000/s/GENESIS_TEXT/"ALT scratch genesis"/')}
 CKP=${PLK_CKPT_BIN:-$(build_variant ckpt '/20, 10, {}, {}};/s/{}, {}}/{}, {{5, "00000000bad0bad0bad0bad0bad0bad0bad0bad0bad0bad0bad0bad0bad0bad0"}}}/')}
+[ -x "$ALT" ] && [ -x "$CKP" ] || fail "scratch builds: $ALT $CKP"
 "$B" wallet create --dev --wallet "$D/w.wallet" >/dev/null 2>&1 || fail "wallet"
 ADDR=$("$B" wallet address --dev --wallet "$D/w.wallet" 2>/dev/null | tail -1)
 

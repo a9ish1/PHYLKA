@@ -703,7 +703,9 @@ void UtxoOverlay::apply_to(UtxoView& base) const {
 
 bool Node::check_tx_context(const Transaction& t, const CoinLookup& find, uint32_t spend_height, std::vector<TxOut>& spent, uint64_t& fee, std::string& err) const {
     if (t.vin.empty() || t.vout.empty()) return err = "empty inputs or outputs", false;
-    if (t.witness.size() != t.vin.size()) return err = "signature count differs from input count", false;
+    const bool grouped = sigs_grouped(t, spend_height);
+    if (p_.sigv2(spend_height) && t.version != 1 && t.version != 2) return err = "unknown transaction version", false;
+    if (!grouped && t.witness.size() != t.vin.size()) return err = "signature count differs from input count", false;
     uint64_t out_sum = 0;
     for (auto& o : t.vout) {
         if (!known_address_version(o.to.version)) return err = "unknown address version", false;
@@ -728,21 +730,23 @@ bool Node::check_tx_context(const Transaction& t, const CoinLookup& find, uint32
         spent.push_back(c.out);
         in_sum += c.out.value;
     }
+    if (grouped && t.witness.size() != Transaction::key_groups(spent).size()) return err = "signature count differs from key count", false;
     if (in_sum < out_sum) return err = "outputs exceed inputs", false;
     fee = in_sum - out_sum;
     return true;
 }
 
 /// Hybrid signature checks (the expensive part: ML-DSA); touches no node state, so it runs without the lock
-static bool verify_tx_sigs(const Transaction& t, const std::vector<TxOut>& spent, std::string& err) {
+static bool verify_tx_sigs(const Transaction& t, const std::vector<TxOut>& spent, bool grouped, const Hash256& genesis, std::string& err) {
+    if (grouped) return t.verify_v2(genesis, spent, &err);
     for (size_t i = 0; i < t.vin.size(); i++)
         if (!t.verify_input(i, spent, &err)) return false;
     return true;
 }
 
-static bool verify_block_sigs(const Block& b, const std::vector<std::vector<TxOut>>& spent, std::string& err) {
+static bool verify_block_sigs(const Block& b, const std::vector<std::vector<TxOut>>& spent, const ChainParams& p, uint32_t height, const Hash256& genesis, std::string& err) {
     for (size_t i = 1; i < b.txs.size(); i++)
-        if (!verify_tx_sigs(b.txs[i], spent[i - 1], err)) return err = "transaction " + hash_hex(b.txs[i].txid()).substr(0, 12) + ": " + err, false;
+        if (!verify_tx_sigs(b.txs[i], spent[i - 1], p.sigv2(height) && b.txs[i].version == 2, genesis, err)) return err = "transaction " + hash_hex(b.txs[i].txid()).substr(0, 12) + ": " + err, false;
     return true;
 }
 
@@ -757,7 +761,7 @@ bool Node::connect_block(const Block& b, uint32_t height, UtxoOverlay& view, boo
         const Transaction& t = b.txs[i];
         uint64_t fee = 0;
         std::vector<TxOut> spent;
-        if (!check_tx_context(t, find, height, spent, fee, err) || (check_sigs && !verify_tx_sigs(t, spent, err)))
+        if (!check_tx_context(t, find, height, spent, fee, err) || (check_sigs && !verify_tx_sigs(t, spent, sigs_grouped(t, height), genesis_hash_, err)))
             return err = "transaction " + hash_hex(t.txid()).substr(0, 12) + ": " + err, false;
         fees += fee;
         for (auto& in : t.vin) {
@@ -1077,19 +1081,26 @@ void Node::reload_mempool(std::vector<Transaction> returned) {
     std::vector<std::pair<uint64_t, Hash256>> order;
     for (auto& [id, mi] : minfo_) order.push_back({mi.seq, id});
     std::sort(order.begin(), order.end());
+    const size_t from_blocks = returned.size();
     for (auto& [seq, id] : order) returned.push_back(std::move(mempool_[id]));
+    const bool grouped_now = p_.sigv2(height() + 1), flipped = grouped_now != mem_sigv2_;
+    mem_sigv2_ = grouped_now;
     mempool_.clear();
     minfo_.clear();
     mem_spent_.clear();
     mem_bytes_ = 0;
-    for (auto& t : returned) {
+    for (size_t i = 0; i < returned.size(); i++) {
+        const Transaction& t = returned[i];
         Hash256 id = t.txid();
         if (mempool_.count(id)) continue;
         size_t size = t.serialize().size();
         std::vector<TxOut> spent;
         uint64_t fee;
         std::string e;
-        if (mem_precheck(t, size, spent, fee, e)) mem_insert(id, t, size, fee, e);   // signatures were checked when it first arrived
+        if (!mem_precheck(t, size, spent, fee, e)) continue;
+        // Signatures were checked when it first arrived, but a version 2 transaction changes meaning at sigv2_height
+        if (t.version == 2 && (flipped || i < from_blocks) && !verify_tx_sigs(t, spent, grouped_now, genesis_hash_, e)) continue;
+        mem_insert(id, t, size, fee, e);
     }
 }
 
@@ -1141,7 +1152,7 @@ bool Node::accept_block(const Block& b, std::string& err, bool* missing_parent, 
         if (raw->invalid || raw->prev != base || b.txs.size() < 2 || !collect_spent(b, raw->height, spent)) break;
         std::string serr;
         lk.unlock();
-        bool sigs_ok = verify_block_sigs(b, spent, serr);
+        bool sigs_ok = verify_block_sigs(b, spent, p_, raw->height, genesis_hash_, serr);
         lk.lock();
         if (raw->invalid) break;
         if (active_.back() != base) continue;
@@ -1167,6 +1178,7 @@ bool Node::accept_tx(const Transaction& t, std::string& err) {
     for (int attempt = 0; attempt < 3; attempt++) {
         std::vector<TxOut> spent;
         uint64_t fee = 0;
+        bool grouped = false;
         {
             std::lock_guard<std::mutex> lk(m_);   // cheap checks and the UTXO lookup
             if (mempool_.count(id)) return err = errmsg::IN_MEMPOOL, true;
@@ -1174,14 +1186,15 @@ bool Node::accept_tx(const Transaction& t, std::string& err) {
             if (size > 200'000) return err = "transaction too large", false;
             if (!mem_precheck(t, size, spent, fee, err)) return false;
             if (mem_full_for(size, fee)) return err = std::string(errmsg::MEMPOOL_FULL) + ": fee is lower than the other transactions", false;
+            grouped = sigs_grouped(t, height() + 1);
         }
-        if (!verify_tx_sigs(t, spent, err)) return false;   // ML-DSA, outside the lock
+        if (!verify_tx_sigs(t, spent, grouped, genesis_hash_, err)) return false;   // ML-DSA, outside the lock
         std::lock_guard<std::mutex> lk(m_);
         if (mempool_.count(id)) return err = errmsg::IN_MEMPOOL, true;
         std::vector<TxOut> again;
         uint64_t fee2 = 0;
         if (!mem_precheck(t, size, again, fee2, err)) return false;   // inputs may have been spent meanwhile
-        bool same = again.size() == spent.size();
+        bool same = again.size() == spent.size() && grouped == sigs_grouped(t, height() + 1);
         for (size_t i = 0; same && i < spent.size(); i++)
             same = again[i].value == spent[i].value && again[i].to.version == spent[i].to.version && again[i].to.program == spent[i].to.program;
         if (!same) continue;   // an input now means something else: the signatures must be checked again

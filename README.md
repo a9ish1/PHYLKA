@@ -226,6 +226,7 @@ phylka node [--dev] [--mine ADDRESS] [--threads N] [--validator] [--wallet FILE]
             [--connect host:port]... [--addnode host:port]... [--seed host:port]... [--noseeds]
             [--port P] [--rpc R] [--datadir DIR] [--conf FILE] [--public]
             [--upgrade-height N]      (--dev only; test knob for the phase 3 activation height)
+            [--sigv2-height N]        (--dev only; test knob for PIP-0001, disabled by default)
 phylka wallet create|restore|address|newaddress|balance|history|send ADDRESS AMOUNT|stake AMOUNT|unstake|showseed
             [--dev] [--rpc R] [--wallet FILE]
 phylka gui [--dev] [--wallet FILE] [--rpc R] [--port P] [--no-browser]

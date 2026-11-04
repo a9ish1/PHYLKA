@@ -63,7 +63,7 @@ echo "== phase 3: restart the node that had to reorganise (and the other one)"
 LOSER=A; [ "$WIN" = "A" ] && LOSER=B
 if [ "$LOSER" = "A" ]; then LP=$PA; LR=$RA; LD=$D/a; LPID=$APID; else LP=$PB; LR=$RB; LD=$D/b; LPID=$BPID; fi
 echo "loser=$LOSER; undo files: $(ls $LD/undo | wc -l)"
-stopnode $LPID; PIDS=()
+stopnode $LPID; PIDS=($APID $BPID)   # the other node stays under cleanup
 $B node --dev --port $LP --rpc $LR --datadir $LD > $D/restart.log 2>&1 & PIDS+=($!)
 sleep 3
 [ "$(field $LR tip)" = "$WTIP" ] || fail "tip after restart differs: $(field $LR tip)"

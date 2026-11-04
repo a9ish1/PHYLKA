@@ -250,6 +250,191 @@ static bool rejects(Node& n, const Block& b, const std::string& needle, const st
     return ok;
 }
 
+static void selftest_pip1(const HybridKey& k0, const HybridKey& k1) {
+    namespace fs = std::filesystem;
+    std::cout << "PIP-0001: one hybrid signature per key\n";
+    Hash256 g{}, other{};
+    g[0] = 1; other[0] = 2;
+    Address a0{ADDRESS_VERSION_HYBRID, k0.pub().program()}, a1{ADDRESS_VERSION_HYBRID, k1.pub().program()};
+    Address s0{ADDRESS_VERSION_STAKE, k0.pub().program()};
+    auto op = [](uint8_t n) { OutPoint o; o.txid[0] = n; o.vout = n; return o; };
+    auto build = [&](const std::vector<TxOut>& spent) {
+        Transaction t;
+        t.version = 2;
+        for (size_t i = 0; i < spent.size(); i++) t.vin.push_back(TxIn{op(uint8_t(i + 1)), {}});
+        t.vout.push_back(TxOut{1 * COIN, a1});
+        t.vout.push_back(TxOut{1 * COIN, a0});
+        return t;
+    };
+
+    // Interleaved keys: the witness order follows the first appearance of each key
+    std::vector<TxOut> spent{TxOut{3 * COIN, a1}, TxOut{3 * COIN, a0}, TxOut{3 * COIN, a1}, TxOut{3 * COIN, s0}};
+    auto groups = Transaction::key_groups(spent);
+    check(groups.size() == 2 && groups[0] == a1.program && groups[1] == a0.program, "groups: distinct keys in order of first appearance; hybrid and stake outputs of a key share one group");
+    Transaction t = build(spent);
+    t.sign_v2(g, k0, spent);
+    t.sign_v2(g, k1, spent);
+    std::string why;
+    check(t.witness.size() == 2 && t.witness[0].key.program() == a1.program && t.verify_v2(g, spent, &why), "two keys over four inputs: one witness per key verifies");
+    Bytes raw = t.serialize();
+    size_t pos = 0;
+    auto back = Transaction::parse(raw, pos);
+    check(back && pos == raw.size() && back->wtxid() == t.wtxid() && back->verify_v2(g, spent), "version 2 serialize -> parse round-trip");
+
+    std::vector<TxOut> one{TxOut{3 * COIN, a0}, TxOut{3 * COIN, a0}, TxOut{3 * COIN, a0}};
+    Transaction u = build(one);
+    u.sign_v2(g, k0, one);
+    check(u.verify_v2(g, one) && u.witness.size() == 1, "three inputs of one key: one witness");
+    check(u.serialize().size() == 93 + 37 * 3 + 3829, "size is 93 + 37 * inputs + 3829 * keys (" + std::to_string(u.serialize().size()) + " bytes)");
+
+    auto rejected = [&](Transaction x, const std::vector<TxOut>& sp, const Hash256& net, const std::string& what) {
+        std::string w;
+        bool ok = !x.verify_v2(net, sp, &w);
+        check(ok, what + " is rejected" + (w.empty() ? "" : " (" + w + ")"));
+    };
+    Transaction x = t; std::swap(x.witness[0], x.witness[1]);
+    rejected(x, spent, g, "swapped witness order");
+    x = t; x.witness.pop_back();
+    rejected(x, spent, g, "too few witnesses");
+    x = t; x.witness.push_back(t.witness[0]);
+    rejected(x, spent, g, "too many witnesses");
+    x = t; x.witness.clear();
+    rejected(x, spent, g, "no witnesses");
+    x = t; x.witness[1] = x.witness[0];
+    rejected(x, spent, g, "a duplicate key");
+    x = t; x.witness[0].sig.schnorr[0] ^= 1;
+    rejected(x, spent, g, "only ML-DSA valid");
+    x = t; x.witness[0].sig.mldsa[10] ^= 1;
+    rejected(x, spent, g, "only Schnorr valid");
+    x = t; x.vout[0].to = a0;
+    rejected(x, spent, g, "a changed output");
+    std::vector<TxOut> lie = spent; lie[0].value = 1000 * COIN;
+    rejected(t, lie, g, "a lie about a spent amount");
+    lie = spent; lie[3].to.version = ADDRESS_VERSION_HYBRID;
+    rejected(t, lie, g, "a lie about a spent address version");
+    rejected(t, spent, other, "a signature from another network");
+    x = t; x.version = 3;
+    rejected(x, spent, g, "another version");
+    x = u; x.vin[0].prev.vout = 99;
+    rejected(x, one, g, "a signature moved to another transaction");
+    std::vector<TxOut> legacy_sp{TxOut{3 * COIN, a0}};
+    Transaction l = build(legacy_sp);
+    l.sign(0, k0, legacy_sp);
+    rejected(l, legacy_sp, g, "a legacy signature in a version 2 transaction");
+    bool threw = false;
+    Transaction y = build(legacy_sp);
+    try { y.sign_v2(g, k1, legacy_sp); } catch (const std::runtime_error&) { threw = true; }
+    check(threw, "a key that owns no input cannot sign");
+
+    // Fixed vector: changes only if the signed message changes
+    Transaction v;
+    v.version = 2;
+    v.vin.push_back(TxIn{OutPoint{Hash256{}, 7}, {}});
+    Address fixed{ADDRESS_VERSION_HYBRID, Hash256{}};
+    v.vout.push_back(TxOut{5, fixed});
+    Hash256 vh = v.sighash_v2(Hash256{}, Hash256{}, {TxOut{6, fixed}});
+    check(to_hex(Bytes(vh.begin(), vh.end())) == "f9dff3146958004f10da22a9be04d9e8ba10601581cbdb9d9dbceb5688e0a122", "sighash_v2 test vector");
+
+    // Consensus at the activation height, through a real node
+    ChainParams p = ChainParams::dev();
+    p.upgrade_height = 1000000;
+    p.sigv2_height = 12;
+    fs::path root = fs::temp_directory_path() / ("phylka-selftest-pip1-" + std::to_string(::getpid()));
+    fs::remove_all(root);
+    {
+        Node n(p, root / "a");
+        std::vector<Block> chain;
+        for (uint64_t i = 1; i <= 8; i++) { chain.push_back(mine_on(n, a0, i)); add_block(n, chain.back()); }
+        Hash256 gen = n.genesis_hash();
+        auto coin = [&](int i) { return OutPoint{chain[size_t(i)].txs[0].txid(), 0}; };
+        auto value = [&](int i) { return chain[size_t(i)].txs[0].vout[0]; };
+        auto spend = [&](std::vector<int> coins, uint32_t ver) {
+            Transaction z;
+            z.version = ver;
+            uint64_t sum = 0;
+            for (int c : coins) { z.vin.push_back(TxIn{coin(c), {}}); sum += value(c).value; }
+            z.vout.push_back(TxOut{sum - 100000, a1});
+            return z;
+        };
+        auto spent_of = [&](std::vector<int> coins) { std::vector<TxOut> r; for (int c : coins) r.push_back(value(c)); return r; };
+
+        std::string e;
+        check(n.height() == 8 && !p.sigv2(n.height() + 1), "below the activation height");
+        Transaction g1 = spend({0, 1}, 2);
+        g1.sign_v2(gen, k0, spent_of({0, 1}));
+        check(!n.accept_tx(g1, e), "below it a grouped transaction is rejected (" + e + ")");
+        Transaction lv2 = spend({0}, 2);
+        lv2.sign(0, k0, spent_of({0}));
+        check(n.accept_tx(lv2, e) && n.mempool().size() == 1, "below it version 2 with a legacy witness is still valid");
+        Block b9 = n.block_template(a0, 9);
+        Block bad = b9;
+        bad.txs.push_back(g1);
+        bad.header.merkle = bad.merkle_root();
+        bad.header.time = n.tip()->header.time + 5;
+        mine(bad.header, 1ULL << 32);
+        check(!add_block(n, bad, &why) && n.height() == 8, "a block with a grouped transaction below the height is rejected (" + why + ")");
+        chain.push_back(mine_on(n, a0, 109)); check(add_block(n, chain.back()) && chain.back().txs.size() == 2, "a block keeps that legacy version 2 transaction valid");
+
+        chain.push_back(mine_on(n, a0, 110)); add_block(n, chain.back());   // height 10; next is 11
+        Transaction lv3 = spend({1}, 2);
+        lv3.sign(0, k0, spent_of({1}));
+        check(n.accept_tx(lv3, e) && n.mempool().size() == 1, "one block before the height it still enters the mempool");
+        Block empty_one = n.block_template(a0, 111);
+        empty_one.txs.resize(1);
+        empty_one.txs[0] = make_coinbase(p, 11, a0, "x", 0);
+        empty_one.header.merkle = empty_one.merkle_root();
+        empty_one.header.time = n.tip()->header.time + 5;
+        mine(empty_one.header, 1ULL << 32);
+        check(add_block(n, empty_one, &why) && n.height() == 11, "next block is mined without it");
+        chain.push_back(empty_one);
+        check(p.sigv2(n.height() + 1) && n.mempool().empty(), "at the activation height the legacy version 2 transaction leaves the mempool");
+
+        check(!n.accept_tx(lv3, e), "from the height a legacy witness in version 2 is rejected (" + e + ")");
+        Transaction v3 = spend({2}, 3);
+        v3.sign(0, k0, spent_of({2}));
+        check(!n.accept_tx(v3, e), "from the height other versions are rejected (" + e + ")");
+        Transaction none = spend({2, 3}, 2);
+        check(!n.accept_tx(none, e), "a version 2 transaction without witnesses is rejected (" + e + ")");
+        Transaction forged = spend({2, 3}, 2);
+        forged.sign_v2(gen, k0, spent_of({2, 3}));
+        forged.witness[0].sig.mldsa[3] ^= 1;
+        check(!n.accept_tx(forged, e), "a forged grouped signature is rejected (" + e + ")");
+        Transaction wrongnet = spend({2, 3}, 2);
+        wrongnet.sign_v2(other, k0, spent_of({2, 3}));
+        check(!n.accept_tx(wrongnet, e), "a signature for another network is rejected (" + e + ")");
+        Transaction v1 = spend({4}, 1);
+        v1.sign(0, k0, spent_of({4}));
+        check(n.accept_tx(v1, e), "version 1 keeps working");
+        Transaction g2 = spend({2, 3}, 2);
+        g2.sign_v2(gen, k0, spent_of({2, 3}));
+        check(n.accept_tx(g2, e) && n.mempool().size() == 2, "a grouped transaction enters the mempool");
+        Block b12 = mine_on(n, a0, 112);
+        check(add_block(n, b12, &why) && n.height() == 12 && b12.txs.size() == 3 && n.mempool().empty(), "a block at the height confirms both");
+        check(n.utxo().coins.count(OutPoint{g2.txid(), 0}) == 1 && n.utxo().coins.count(coin(2)) == 0 && n.utxo().coins.count(coin(3)) == 0, "the UTXO set follows");
+
+        // Same chain from the blocks alone, on a fresh node, with undo data lost
+        Node fresh(p, root / "b");
+        bool all = true;
+        for (auto& bl : chain) all = add_block(fresh, bl) && all;
+        all = add_block(fresh, b12) && all;
+        check(all && fresh.tip()->hash == n.tip()->hash && same_utxo(fresh.utxo(), n.utxo()), "a fresh node accepts the same blocks and reaches the same UTXO set");
+
+        // A heavier branch without those transactions returns them to the mempool, signatures still valid
+        Node fork(p, root / "c");
+        for (auto& bl : chain) add_block(fork, bl);
+        Block f12 = mine_on(fork, a1, 212), f13;
+        add_block(fork, f12);
+        f13 = mine_on(fork, a1, 213);
+        add_block(fork, f13);
+        check(add_block(n, f12) && add_block(n, f13) && n.tip()->hash == f13.header.hash() && n.mempool().count(g2.txid()) == 1, "a reorganisation above the height returns the grouped transaction to the mempool");
+    }
+    {
+        Node reopened(p, root / "a");
+        check(reopened.height() == 13, "the node reloads a chain with grouped transactions from disk");
+    }
+    fs::remove_all(root);
+}
+
 static void selftest_phase3(const HybridKey& k0, const HybridKey& k1) {
     namespace fs = std::filesystem;
     ChainParams t = ChainParams::dev();   // small numbers so the test crosses every threshold quickly
@@ -668,6 +853,7 @@ static int selftest() {
     selftest_u256();
     selftest_node(k0, k1);
     selftest_phase3(k0, k1);
+    selftest_pip1(k0, k1);
     selftest_checkpoints(k0, k1);
 
     std::cout << "wallet file (encrypted seed)\n";
@@ -747,7 +933,7 @@ static int usage(int code) {
     (code ? std::cerr : std::cout) << "PHYLKA (PLK)\n"
                                    "  phylka node [--dev] [--mine ADDRESS] [--threads N] [--validator] [--wallet FILE] [--mine-anyway (--dev only)]\n"
                  "              [--connect host:port]... [--addnode host:port]... [--seed host:port]... [--noseeds]\n"
-                 "              [--port P] [--rpc R] [--datadir DIR] [--conf FILE] [--public] [--upgrade-height N (--dev only)]\n"
+                 "              [--port P] [--rpc R] [--datadir DIR] [--conf FILE] [--public] [--upgrade-height N (--dev only)] [--sigv2-height N (--dev only)]\n"
                  "     --public: listen on all interfaces (default: loopback only); RPC is always 127.0.0.1 only\n"
                  "     config: DIR/phylka.conf or --conf FILE, key=value lines (keys are flag names without \"--\", # starts a comment)\n"
                  "  phylka wallet create|restore|address|newaddress|balance|history|send ADDRESS AMOUNT|showseed [--dev] [--rpc R]\n"
@@ -782,7 +968,7 @@ int main(int argc, char** argv) {
     std::map<std::string, std::string> opt;
     std::map<std::string, std::vector<std::string>> lists;   // repeatable flags: connect, seed, addnode
     std::vector<std::string> pos;
-    static const std::set<std::string> valued = {"datadir", "port", "rpc", "connect", "seed", "addnode", "mine", "threads", "wallet", "conf", "upgrade-height"};
+    static const std::set<std::string> valued = {"datadir", "port", "rpc", "connect", "seed", "addnode", "mine", "threads", "wallet", "conf", "upgrade-height", "sigv2-height"};
     for (int i = 2; i < argc; i++) {
         std::string a = argv[i];
         if (a.rfind("--", 0) == 0) {
@@ -796,7 +982,7 @@ int main(int argc, char** argv) {
     }
     static const std::set<std::string> commands = {"selftest", "wallet", "node", "newseed", "gui", "help"};
     static const std::set<std::string> flags = {"dev", "datadir", "port", "rpc", "connect", "seed", "addnode", "noseeds", "mine", "threads", "wallet",
-                                                "conf", "upgrade-height", "validator", "public", "test-equivocate", "mine-anyway", "no-browser", "help"};
+                                                "conf", "upgrade-height", "sigv2-height", "validator", "public", "test-equivocate", "mine-anyway", "no-browser", "help"};
     bool help = cmd == "--help" || cmd == "-h" || cmd == "help" || opt.count("help");
     for (int i = 2; i < argc; i++) if (std::string(argv[i]) == "-h") help = true;
     if (help) return usage(0);
@@ -814,7 +1000,11 @@ int main(int argc, char** argv) {
         if (!opt.count("dev")) { std::cerr << "--upgrade-height: --dev only (on the main network the activation height is part of consensus)\n"; return 1; }
         custom.upgrade_height = uint32_t(std::stoul(opt["upgrade-height"]));
     }
-    const ChainParams& p = opt.count("dev") ? (opt.count("upgrade-height") ? custom : ChainParams::dev()) : ChainParams::main();
+    if (opt.count("sigv2-height")) {
+        if (!opt.count("dev")) { std::cerr << "--sigv2-height: --dev only (on the main network the activation height is part of consensus)\n"; return 1; }
+        custom.sigv2_height = uint32_t(std::stoul(opt["sigv2-height"]));
+    }
+    const ChainParams& p = opt.count("dev") ? (opt.count("upgrade-height") || opt.count("sigv2-height") ? custom : ChainParams::dev()) : ChainParams::main();
     uint16_t rpc_port = opt.count("rpc") ? uint16_t(std::stoi(opt["rpc"])) : p.rpc_port;
 
     if (cmd == "selftest") return selftest();

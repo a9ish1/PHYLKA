@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <cstring>
+#include <set>
+#include <stdexcept>
 
 #include "codec.h"
 
@@ -150,6 +152,59 @@ bool Transaction::verify_input(size_t index, const std::vector<TxOut>& spent, st
     if (!known_address_version(out.to.version)) return fail("unknown address version");
     if (w.key.program() != out.to.program) return fail("keys do not match the address");
     if (!verify(w.key, sighash(index, spent), w.sig)) return fail("invalid signature");
+    return true;
+}
+
+std::vector<Hash256> Transaction::key_groups(const std::vector<TxOut>& spent) {
+    std::vector<Hash256> groups;
+    std::set<Hash256> seen;
+    for (auto& o : spent)
+        if (seen.insert(o.to.program).second) groups.push_back(o.to.program);
+    return groups;
+}
+
+static Hash256 spent_hash_v2(const std::vector<TxOut>& spent) {
+    Bytes b;
+    put_size(b, spent.size());
+    for (auto& o : spent) put_out(b, o);
+    return tagged_hash("PHYLKA/spent/v2", b);
+}
+
+static Hash256 sighash_v2_of(const Hash256& genesis, const Hash256& id, const Hash256& spent_hash, const Hash256& program) {
+    Bytes b;
+    put_bytes(b, genesis.data(), 32);
+    put_bytes(b, id.data(), 32);
+    put_bytes(b, spent_hash.data(), 32);
+    put_bytes(b, program.data(), 32);
+    return tagged_hash("PHYLKA/sighash/v2", b);
+}
+
+Hash256 Transaction::sighash_v2(const Hash256& genesis, const Hash256& program, const std::vector<TxOut>& spent) const {
+    return sighash_v2_of(genesis, txid(), spent_hash_v2(spent), program);
+}
+
+void Transaction::sign_v2(const Hash256& genesis, const HybridKey& key, const std::vector<TxOut>& spent) {
+    std::vector<Hash256> groups = key_groups(spent);
+    Hash256 program = key.pub().program();
+    auto it = std::find(groups.begin(), groups.end(), program);
+    if (it == groups.end()) throw std::runtime_error("this key does not own any input");
+    if (witness.size() != groups.size()) witness.resize(groups.size());
+    witness[size_t(it - groups.begin())] = Witness{key.pub(), key.sign(sighash_v2(genesis, program, spent))};
+}
+
+bool Transaction::verify_v2(const Hash256& genesis, const std::vector<TxOut>& spent, std::string* why) const {
+    auto fail = [&](const char* m) { if (why) *why = m; return false; };
+    if (version != 2) return fail("not a version 2 transaction");
+    if (spent.size() != vin.size()) return fail("missing spent output");
+    for (auto& o : spent)
+        if (!known_address_version(o.to.version)) return fail("unknown address version");
+    std::vector<Hash256> groups = key_groups(spent);
+    if (witness.size() != groups.size()) return fail("signature count differs from key count");
+    Hash256 id = txid(), sh = spent_hash_v2(spent);   // hashed once: the cost stays linear in inputs plus keys
+    for (size_t j = 0; j < groups.size(); j++) {
+        if (witness[j].key.program() != groups[j]) return fail("keys do not match the address");
+        if (!verify(witness[j].key, sighash_v2_of(genesis, id, sh, groups[j]), witness[j].sig)) return fail("invalid signature");
+    }
     return true;
 }
 

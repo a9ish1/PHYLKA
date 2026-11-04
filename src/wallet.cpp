@@ -9,6 +9,7 @@
 #include <fstream>
 #include <iostream>
 #include <map>
+#include <set>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -282,13 +283,30 @@ WalletBalance wallet_balance(const ChainParams& p, const std::vector<WalletUtxo>
     return b;
 }
 
-PaymentPlan wallet_plan_payment(std::vector<WalletUtxo> coins, uint64_t amount, bool send_all, uint64_t rate) {
+bool wallet_sigv2_active(uint16_t rpc) {
+    std::istringstream info(http_get(rpc, "/info"));
+    std::string key;
+    uint64_t value = 0, height = 0, activation = UINT32_MAX;
+    while (info >> key) {
+        std::string text;
+        if (!(info >> text)) break;
+        if (key != "height" && key != "sigv2_height") continue;
+        value = std::strtoull(text.c_str(), nullptr, 10);
+        (key == "height" ? height : activation) = value;
+    }
+    return height + 1 >= activation;
+}
+
+PaymentPlan wallet_plan_payment(std::vector<WalletUtxo> coins, uint64_t amount, bool send_all, uint64_t rate, bool sigv2) {
     std::sort(coins.begin(), coins.end(), [](auto& a, auto& b) { return a.value > b.value; });
     PaymentPlan r;
-    for (auto& c : coins) {   // ~3.8 KB per hybrid input
+    r.sigv2 = sigv2;
+    std::set<uint32_t> keys;
+    for (auto& c : coins) {   // ~3.8 KB per hybrid input (or per key)
         r.use.push_back(c);
         r.in_sum += c.value;
-        r.fee = (100 + 3866 * r.use.size()) * rate;   // real size: 93 + 3866 per hybrid input with change (relay minimum is 1 fyl per byte)
+        keys.insert(c.index);
+        r.fee = (sigv2 ? 100 + 37 * r.use.size() + 3829 * keys.size() : 100 + 3866 * r.use.size()) * rate;   // real size: 93 + 3866 per hybrid input with change (relay minimum is 1 fyl per byte)
         if (!send_all && r.in_sum >= amount + r.fee) break;
     }
     if (send_all) {
@@ -315,7 +333,15 @@ Transaction wallet_sign_payment(const ChainParams& p, const WalletSecret& s, con
     t.vout.push_back(TxOut{plan.amount, to});
     uint64_t change = plan.in_sum - plan.amount - plan.fee;
     if (change > 0) t.vout.push_back(TxOut{change, *Address::parse(addrs[0], p.hrp)});
-    for (size_t i = 0; i < plan.use.size(); i++) t.sign(i, HybridKey::derive(seed, plan.use[i].index), spent);
+    if (plan.sigv2) {
+        t.version = 2;
+        Hash256 genesis = p.genesis().header.hash();
+        std::set<uint32_t> keys;
+        for (auto& c : plan.use) keys.insert(c.index);
+        for (uint32_t k : keys) t.sign_v2(genesis, HybridKey::derive(seed, k), spent);
+    } else {
+        for (size_t i = 0; i < plan.use.size(); i++) t.sign(i, HybridKey::derive(seed, plan.use[i].index), spent);
+    }
     wipe(seed.data(), seed.size());
     return t;
 }
@@ -436,7 +462,7 @@ int wallet_command(const ChainParams& p, const fs::path& file, uint16_t rpc, con
         }
         // Plans, confirms, signs and broadcasts a payment from `coins` (largest first)
         auto pay = [&](const Address& to, uint64_t amount, bool send_all, std::vector<WalletUtxo> coins, uint64_t rate, const std::string& what) {
-            PaymentPlan plan = wallet_plan_payment(std::move(coins), amount, send_all, rate);
+            PaymentPlan plan = wallet_plan_payment(std::move(coins), amount, send_all, rate, wallet_sigv2_active(rpc));
             std::cout << what << " " << format_plk(int64_t(plan.amount)) << "\n  to:       " << to.str(p.hrp) << "\n  fee:      "
                       << format_plk(int64_t(plan.fee)) << "  (" << plan.use.size() << " input(s))\n";
             if (ask("Confirm? [y/N] ") != "y") { std::cout << "Cancelled.\n"; return 1; }

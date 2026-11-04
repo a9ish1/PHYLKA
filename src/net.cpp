@@ -965,7 +965,7 @@ std::string Rpc::handle(const std::string& path) {
           << "\nfinalized " << node_.finalized_height() << "\nvalidators "
           << (node_.at(node_.height() / p.checkpoint_interval * p.checkpoint_interval) && node_.stake_at(node_.height() / p.checkpoint_interval * p.checkpoint_interval)
                   ? node_.stake_at(node_.height() / p.checkpoint_interval * p.checkpoint_interval)->size() : 0)
-          << "\npeers " << net_.peers() << "\nhashrate " << (hashrate_ ? hashrate_() : 0) << "\nmaturity " << p.coinbase_maturity << "\nupgrade_height " << p.upgrade_height << "\nchain_final " << node_.chain_final()
+          << "\npeers " << net_.peers() << "\nhashrate " << (hashrate_ ? hashrate_() : 0) << "\nmaturity " << p.coinbase_maturity << "\nupgrade_height " << p.upgrade_height << "\nsigv2_height " << p.sigv2_height << "\nchain_final " << node_.chain_final()
           << "\nregistered " << node_.registry_size() << "\nslashed " << node_.slashed_count() << "\nutxo_commit " << to_hex(node_.utxo_commit()) << "\n";
         return o.str();
     }

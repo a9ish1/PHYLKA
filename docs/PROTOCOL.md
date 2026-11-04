@@ -247,6 +247,21 @@ chain that diverges below the highest checkpoint is never activated. The P2P `ve
 `u32 height | u64 nonce | 32 genesis hash | u16 listen port` (46 bytes; the 44-, 12- and 4-byte forms are still parsed). The listen port is non-zero only for nodes started with `--public` (and on the dev network, which also allows loopback peers); a peer announcing another genesis
 hash is disconnected ("foreign network (different genesis)").
 
+## 6b. One signature per key (PIP-0001, not active)
+
+Disabled on main and dev (`sigv2_height` is the maximum value). When activated by a
+release, from that height a non-coinbase transaction must have version 1 (legacy rules) or
+version 2. In version 2 the encoding is unchanged, but the witness list holds one entry per
+distinct key, in order of the key's first appearance among the spent outputs:
+
+```
+spent_hash    = tagged_hash("PHYLKA/spent/v2", varint len(spent) || for each spent: u64 value | u8 version | 32 program)
+sighash_v2(p) = tagged_hash("PHYLKA/sighash/v2", genesis_hash || txid || spent_hash || p)
+```
+
+Each witness key must hash to its program `p`, and both signatures must verify over
+`sighash_v2(p)`. Details: [PIP-0001](proposals/PIP-0001-per-key-signatures.md).
+
 ## 7. P2P protocol (TCP)
 
 Peer discovery: a peer that announces a listen port is remembered (a fresh announcement is also relayed to two other peers). A node

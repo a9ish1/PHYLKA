@@ -26,7 +26,7 @@ BADDR=$($B wallet address --dev --wallet $D/b.wallet | tail -1)
 echo "PASS node-not-running is reported"
 
 # 2. node mines to A, balance appears
-$B node --dev --mine $ADDR --threads 1 --port $NP --rpc $RP --datadir $D/node --noseeds > $D/node.log 2>&1 & PIDS+=($!)
+$B node --dev ${PLK_NODE_ARGS:-} --mine $ADDR --threads 1 --port $NP --rpc $RP --datadir $D/node --noseeds > $D/node.log 2>&1 & PIDS+=($!)
 for i in $(seq 1 60); do S=$(api $U/api/overview | jget wallet.balance.spendable 2>/dev/null); [ -n "$S" ] && [ "$S" != "None" ] && [ "$S" -gt 0 ] && break; sleep 1; done
 [ "$S" -gt 0 ] || fail "no balance after mining"
 echo "PASS balance after mining: $S fyl"

@@ -809,17 +809,17 @@ struct GuiServer::Impl {
             if (to->version != ADDRESS_VERSION_HYBRID) throw ApiError{400, "This is a stake address. Use the Staking page to lock coins.", "bad_address"};
             pl.to = *to;
             uint64_t amount = max ? 0 : amount_of(b);
-            pl.plan = wallet_plan_payment(wallet_spendable(all), amount, max, WALLET_FEE_RATE);
+            pl.plan = wallet_plan_payment(wallet_spendable(all), amount, max, WALLET_FEE_RATE, wallet_sigv2_active(cfg.rpc));
         } else if (pl.kind == "stake") {
             uint64_t amount = amount_of(b);
             if (amount < p.min_stake) throw ApiError{400, "The minimum stake is " + format_plk(int64_t(p.min_stake)) + ".", "bad_amount"};
             pl.to = Address{ADDRESS_VERSION_STAKE, Address::parse(addrs[0], p.hrp)->program};
-            pl.plan = wallet_plan_payment(wallet_spendable(all), amount, false, WALLET_FEE_RATE);
+            pl.plan = wallet_plan_payment(wallet_spendable(all), amount, false, WALLET_FEE_RATE, wallet_sigv2_active(cfg.rpc));
         } else if (pl.kind == "unstake") {
             auto v = wallet_unlockable_stakes(p, all);
             if (v.empty()) throw ApiError{400, "No stakes whose lock period has expired.", "nothing_to_unstake"};
             pl.to = *Address::parse(addrs[0], p.hrp);
-            pl.plan = wallet_plan_payment(v, 0, true, WALLET_FEE_RATE);
+            pl.plan = wallet_plan_payment(v, 0, true, WALLET_FEE_RATE, wallet_sigv2_active(cfg.rpc));
         } else {
             throw ApiError{400, "unknown transaction kind", "bad_kind"};
         }

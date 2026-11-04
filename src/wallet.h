@@ -79,9 +79,13 @@ WalletBalance wallet_balance(const ChainParams& p, const std::vector<WalletUtxo>
 struct PaymentPlan {
     std::vector<WalletUtxo> use;
     uint64_t amount = 0, fee = 0, in_sum = 0;
+    bool sigv2 = false;   // sign as a version 2 transaction: one hybrid signature per key
 };
-/// Picks coins (largest first) and computes the fee: (100 + 3866 * inputs) * rate. Throws when funds are insufficient.
-PaymentPlan wallet_plan_payment(std::vector<WalletUtxo> coins, uint64_t amount, bool send_all, uint64_t rate);
+/// Is the next block under the PIP-0001 rules, according to the node? Old nodes do not report it: no.
+bool wallet_sigv2_active(uint16_t rpc);
+/// Picks coins (largest first) and computes the fee: (100 + 3866 * inputs) * rate, or with sigv2 (100 + 37 * inputs + 3829 * keys) * rate.
+/// Throws when funds are insufficient.
+PaymentPlan wallet_plan_payment(std::vector<WalletUtxo> coins, uint64_t amount, bool send_all, uint64_t rate, bool sigv2 = false);
 /// Builds and signs the transaction (change goes back to address #0)
 Transaction wallet_sign_payment(const ChainParams& p, const WalletSecret& s, const std::vector<std::string>& addrs, const PaymentPlan& plan,
                                 const Address& to);
